@@ -1,0 +1,20 @@
+version: "3.1"
+
+services:
+  pythonapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace
+    command: sleep infinity
+
+  graph: # user: neo4j, password: empty
+    image: neo4j:4.4.3-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./data:/data
+    environment:
+      - NEO4J_AUTH=none
