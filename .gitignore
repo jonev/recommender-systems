@@ -1,6 +1,6 @@
 active1000/
 .devcontainer/data
-
+*.feather
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

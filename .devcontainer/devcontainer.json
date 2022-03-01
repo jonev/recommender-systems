@@ -1,9 +1,6 @@
 {
   "name": "Python-Dev",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "pythonapp",
-  "shutdownAction": "stopCompose",
-  "workspaceFolder": "/workspace",
+  "dockerFile": "Dockerfile",
   "settings": {
     "python.pythonPath": "/usr/local/bin/python",
     "python.linting.enabled": true,
@@ -16,5 +13,6 @@
     "oderwat.indent-rainbow",
     "ms-python.vscode-pylance",
     "esbenp.prettier-vscode"
-  ]
+  ],
+  "runArgs": ["--net=host"]
 }

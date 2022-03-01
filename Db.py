@@ -3,6 +3,9 @@ import json
 from types import SimpleNamespace
 import os
 import time
+import pandas as pd
+import logging
+logging.basicConfig(filename='info.log', level=logging.INFO)
 
 class DbWriter:
 
@@ -22,19 +25,19 @@ class DbWriter:
             for (documentId, categoriesString) in categories:
                 session.write_transaction(self._create_categories, documentId, categoriesString)
 
-    def predict_for_user(self, user, oldest_read):
+    def predict_for_user(self, user):
         with self.driver.session() as session:
-            result = session.write_transaction(self._predict_for_user, user, oldest_read)
+            result = session.write_transaction(self._predict_for_user_on_popularity, user)
             return result
 
-    def cold_start(self, oldest_read):
+    def cold_start(self):
         with self.driver.session() as session:
-            result = session.write_transaction(self._cold_start, oldest_read)
+            result = session.write_transaction(self._cold_start_on_popularity)
             return result
     
-    def cold_start_with_categories(self, oldest_read, categories):
+    def cold_start_with_categories(self, categories):
         with self.driver.session() as session:
-            result = session.write_transaction(self._cold_start_with_categories, oldest_read, categories)
+            result = session.write_transaction(self._cold_start_with_categories_on_popularity, categories)
             return result
     
     def exists(self, user):
@@ -46,7 +49,8 @@ class DbWriter:
     @staticmethod
     def _create_event(tx, event):
         if event.title is None and event.url == "http://adressa.no":
-            event.title = "Frontpage"
+            # event.title = "Frontpage"
+            return
         if event.title is None:
             event.title = "Unknown"
         if event.activeTime is None: 
@@ -77,115 +81,159 @@ class DbWriter:
                         "return u", userId=user)
         return result.single()
 
-    def import_data(self):
-        path = "active1000"
-        files = os.listdir(path)
+    def import_data(self, path, files):
         nrOfFiles = len(files)
         nr = 0
-        print(f"Starting import, nr of files: {nrOfFiles}")
+        logging.info(f"Starting import, nr of files: {nrOfFiles}")
         for f in files:
             file_name=os.path.join(path,f)
             nr = nr + 1
             if os.path.isfile(file_name):
                 start_time = time.time()
-                print(f"Filename: {file_name}, nr: {nr}/{nrOfFiles}")
+                logging.info(f"Filename: {file_name}, nr: {nr}/{nrOfFiles}")
                 events = []
                 categories = []
                 for line in open(file_name):
                     event = json.loads(line, object_hook=lambda d: SimpleNamespace(**d))
                     if not event is None:
                         events.append(event)
-                        #articleId = self.insert_event(event)
                         if event.category is not None:
                             categories.append([event.documentId, event.category])
-                            #self.insert_categories(articleId, event.category)
                 self.insert_events(events)
                 self.insert_categories(categories)
-                print(f"File took: {((time.time() - start_time)/60.0)} minutes")
+                logging.info(f"File took: {((time.time() - start_time)/60.0)} minutes")
+    
+    def get_file_paths(self, root_directory: str, test_factor: float):
+        all_files = os.listdir(root_directory)
+        all_files.sort()
+        nr_of_files = len(all_files)
+        logging.info(all_files)
+        logging.info(f"Number of files: {nr_of_files}")
+        train = int(nr_of_files * test_factor)
+        test = nr_of_files - train
+        logging.info(f"Split dataset - files, train: {train}, test: {test}")
+        return (all_files[:train], all_files[train:])
+
+
+        
 
     
     @staticmethod
-    def _predict_for_user(tx, user, oldest_read):
+    def _predict_for_user_on_popularity(tx, user):
         result = tx.run(
                         " match (u1 {id: $userId})-[r1:read]->(a)<-[r2:read]-(u2)"
-                        " where a.title <> 'Frontpage'" # At this point it would make sense to filter on r1.time to not recommend old articles
                         " match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) "
-                        " and recommendation.title <> 'Frontpage' "
-                        " and r3.time > $oldestRead"
-                        " return distinct recommendation.title as title, recommendation.url as url,r3.activeTime as activeTime, r3.time as time"
+                        " return distinct recommendation.url as url, r3.activeTime as activeTime"
                         " order by activeTime desc"
-                        " limit 3", userId=user,oldestRead=oldest_read)
-        return [[record["title"], record["url"], record["activeTime"], record["time"]] for record in result]
+                        " limit 10", userId=user)
+        return [record["url"] for record in result]
     
     @staticmethod
-    def _cold_start(tx, oldest_read):
+    def _cold_start_on_popularity(tx):
         result = tx.run(
                         " match (u1)-[r1:read]->(recommendation)"
-                        " where recommendation.title <> 'Frontpage' and r1.time > $oldestRead"
-                        " return distinct recommendation.title as title, recommendation.url as url, r1.activeTime as activeTime, r1.time as time"
+                        " return distinct recommendation.url as url, r1.activeTime as activeTime"
                         " order by r1.activeTime desc"
-                        " limit 3", oldestRead=oldest_read)
-        return [[record["title"], record["url"], record["activeTime"], record["time"]] for record in result]
+                        " limit 10")
+        return [record["url"] for record in result]
     
     @staticmethod
-    def _cold_start_with_categories(tx, oldest_read, categories):
+    def _cold_start_with_categories_on_popularity(tx, categories):
         result = tx.run(
                         " match (u1)-[r1:read]->(recommendation)-[rc:has_category]->(c:Category)"
-                        " where recommendation.title <> 'Frontpage' and r1.time > $oldestRead and c.name in $categories"
-                        " return distinct recommendation.title as title, recommendation.url as url, r1.activeTime as activeTime, r1.time as time, c.name as category"
+                        " where c.name in $categories"
+                        " return distinct recommendation.url as url, r1.activeTime as activeTime"
                         " order by r1.activeTime desc"
-                        " limit 3", oldestRead=oldest_read, categories=categories)
-        return [[record["title"], record["url"], record["activeTime"], record["time"], record["category"]] for record in result]
+                        " limit 10", categories=categories)
+        return [record["url"] for record in result]
     
-    def predict(self, users, oldest_read, categories):
+    def predict_on_popularity(self, users, categories):
+        predictions = []
+        nr_of_users = len(users)
+        nr = 0
         for user in users:
-            print("--------------------------------------")
+            logging.info("--------------------------------------")
+            start_time = time.time()
             if self.exists(user):
-                print(f"User Exists: {user}, running prediction")
-                predictions = self.predict_for_user(user, oldest_read)
-                for prediction in predictions:
-                    print(f"Title: {prediction[0]}, url: {prediction[1]}, read-time: {str(prediction[2])}, time of read: {str(prediction[3])}")
+                p = self.predict_for_user(user)
+                predictions.append([user, p])
             else:
-                print(f"User: {user}, does not exist, running cold start") # In a real case, the user will exist, but it will only have been reading the front-page, this simulate the same behavior
+                logging.info(f"User: {user}, does not exist, running cold start") # In a real case, the user will exist, but it will only have been reading the front-page, this simulate the same behavior
                 if categories is None:
-                    colds = self.cold_start(oldest_read)
+                    colds = self.cold_start()
                 else:
-                    print(f"With categories: {categories}")
-                    colds = self.cold_start_with_categories(oldest_read, categories)
+                    logging.info(f"With categories: {categories}")
+                    colds = self.cold_start_with_categories(categories)
 
-                for cold in colds:
-                    print(f"Title: {cold[0]}, url: {cold[1]}, read-time: {str(cold[2])}, time of read: {str(cold[3])}")
+                predictions.append([user, colds])
+            nr = nr + 1
+            took_m = ((time.time() - start_time)/60.0)
+            logging.info(f"User took: {took_m} minutes, {nr}/{nr_of_users}, estimated time left: {((nr_of_users - nr)*took_m)} minutes")
+        p = []
+        for prediction in predictions:
+            for pp in prediction[1]:
+                p.append([prediction[0], pp])
+        predictions_df = pd.DataFrame(p)
+        predictions_df.columns = ["userId", "url"]
+        return predictions_df
 
 
+def load_data(path, files):
+    map_lst=[]
+    nrOfFiles = len(files)
+    nr = 0
+    logging.info(f"Starting import, nr of files: {nrOfFiles}")
+    for f in files:
+        file_name=os.path.join(path,f)
+        nr = nr + 1
+        logging.info(f"Filename: {file_name}, nr: {nr}/{nrOfFiles}")
+        if os.path.isfile(file_name):
+            for line in open(file_name):
+                obj = json.loads(line.strip())
+                if not obj is None:
+                    map_lst.append(obj)
+    return pd.DataFrame(map_lst) 
 
 if __name__ == "__main__":
-    db = DbWriter("bolt://graph:7687", "neo4j", "")
+    db = DbWriter("bolt://localhost:7687", "neo4j", "")
     # Import data into database:
-    # total_time = time.time()
-    # db.import_data()
-    # print(f"File took: {((time.time() - total_time)/60.0)} minutes")
-
+    total_time = time.time()
+    (train, test) = db.get_file_paths("active1000", 0.7)
+    # logging.info(train, test)
+    db.import_data("active1000", train) 
+    logging.info(f"Import data took: {((time.time() - total_time)/60.0)} minutes") 
+    # Import data took: 290.89670590559643 minutes with frontpages
+    # Import data took: 219.35234892368317 minutes without  frontpages
+    # df_test = load_data("active1000", test[:1])
+    # df_test = df_test.dropna()
+    # logging.info(df_test)
     # Insert new article
 
+    # for col in df_test.columns:
+    #     logging.info(col)
+    # df_user = df_test[df_test["userId"] == 'cx:13563753207631091420187:v4m7n38yvolp']
+    # logging.info(df_user)
 
 
     # Run predictions
     # "Now" is: Saturday, December 31, 2016 23:00:27
-    oldest_read = 123 #1488330061 # Wednesday, March 1, 2017 1:01:01
+    # oldest_read = 123 #1488330061 # Wednesday, March 1, 2017 1:01:01
     
     # Prediction on existing users
-    print("\n")
-    users = ["cx:13563753207631091420187:v4m7n38yvolp", "cx:hrrqrd7eclmjbd57:23tj2qhytnkt9", "cx:13233863419858515505:13cyrrnk4fgs"]
-    db.predict(users, oldest_read, None)
-    print("\n")
+    # logging.info("\n")
+    # users = ["cx:13563753207631091420187:v4m7n38yvolp"] #, "cx:hrrqrd7eclmjbd57:23tj2qhytnkt9", "cx:13233863419858515505:13cyrrnk4fgs"]
+    # predictions = db.predict(users, oldest_read, None)
+    # for prediction in predictions:
+    #     logging.info(f"Title: {prediction[0]}, url: {prediction[1]}, read-time: {str(prediction[2])}, time of read: {str(prediction[3])}")
+    # logging.info("\n")
 
     # Prediction on new user - cold start
-    print("\n")
-    categories = ["sport", "okonomi", "nyheter"] # Simulates that a new user is picking some categories when creating the user
-    users = ["unknown"]
-    db.predict(users, oldest_read, categories)
-    db.close()
-    print("\n")
+    # logging.info("\n")
+    # categories = ["sport", "okonomi", "nyheter"] # Simulates that a new user is picking some categories when creating the user
+    # users = ["unknown"]
+    # db.predict(users, oldest_read, categories)
+    # db.close()
+    # logging.info("\n")
 
 
 
