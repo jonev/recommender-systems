@@ -40,9 +40,19 @@ class DbWriter:
             result = session.write_transaction(self._cold_start_with_categories_on_popularity, categories)
             return result
     
-    def exists(self, user):
+    def user_exists(self, user):
         with self.driver.session() as session:
-            result = session.write_transaction(self._exists, user)
+            result = session.write_transaction(self._user_exists, user)
+            return result
+    
+    def find_best_friends(self, user):
+        with self.driver.session() as session:
+            result = session.write_transaction(self._find_best_friends, user)
+            return result
+    
+    def find_newest_to_friend(self, user, friend):
+        with self.driver.session() as session:
+            result = session.write_transaction(self._find_newest_to_friend, user, friend)
             return result
 
 
@@ -76,7 +86,7 @@ class DbWriter:
                         "RETURN id(c) as id", documentId=documentId, name=category)
     
     @staticmethod
-    def _exists(tx, user):
+    def _user_exists(tx, user):
         result = tx.run("Match (u:User) where u.id = $userId "
                         "return u", userId=user)
         return result.single()
@@ -154,7 +164,7 @@ class DbWriter:
         for user in users:
             logging.info("--------------------------------------")
             start_time = time.time()
-            if self.exists(user):
+            if self.user_exists(user):
                 p = self.predict_for_user(user)
                 predictions.append([user, p])
             else:
@@ -167,6 +177,45 @@ class DbWriter:
 
                 predictions.append([user, colds])
             nr = nr + 1
+            took_m = ((time.time() - start_time)/60.0)
+            logging.info(f"User took: {took_m} minutes, {nr}/{nr_of_users}, estimated time left: {((nr_of_users - nr)*took_m)} minutes")
+        p = []
+        for prediction in predictions:
+            for pp in prediction[1]:
+                p.append([prediction[0], pp])
+        predictions_df = pd.DataFrame(p)
+        predictions_df.columns = ["userId", "url"]
+        return predictions_df
+    
+    @staticmethod
+    def _find_best_friends(tx, user):
+        result = tx.run(
+                        " match (u:User {id: $userId})-[r:read]->(a:Article)<-[:read]-(f:User)"
+                        " return f.id as friend, count(*) as c"
+                        " order by c desc"
+                        " limit 3", userId=user)
+        return [record["friend"] for record in result]
+    
+    @staticmethod
+    def _find_newest_to_friend(tx, user, friend):
+        result = tx.run(
+                        " match (f:User {id: $friendId})-[r:read]->(recommendation:Article)"
+                        " match (u:User {id: $userId})"
+                        " where not (u)-[:read]->(recommendation:Article)"
+                        " return recommendation.url as url, recommendation.publishtime as publishtime"
+                        " order by publishtime desc"
+                        " limit 10", userId=user, friendId=friend)
+        return [record["url"] for record in result]
+    
+    def predict_on_bestfriends_newest(self, users):
+        predictions = []
+        nr_of_users = len(users)
+        nr = 0
+        for user in users:
+            logging.info("--------------------------------------")
+            start_time = time.time()
+            friends = self.find_best_friends(user)
+            predictions.append([user, self.find_newest_to_friend(user, friends[0])])
             took_m = ((time.time() - start_time)/60.0)
             logging.info(f"User took: {took_m} minutes, {nr}/{nr_of_users}, estimated time left: {((nr_of_users - nr)*took_m)} minutes")
         p = []
