@@ -7,7 +7,7 @@ import pandas as pd
 import logging
 logging.basicConfig(filename='info.log', level=logging.INFO)
 
-class DbWriter:
+class GraphRecommendationSystem:
 
     def __init__(self, uri, user, password):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
@@ -25,19 +25,19 @@ class DbWriter:
             for (documentId, categoriesString) in categories:
                 session.write_transaction(self._create_categories, documentId, categoriesString)
 
-    def predict_for_user(self, user):
+    def __predict_for_user_on_popularity(self, user):
         with self.driver.session() as session:
-            result = session.write_transaction(self._predict_for_user_on_popularity, user)
+            result = session.write_transaction(self.__predict_for_user_on_popularity, user)
             return result
 
     def cold_start(self):
         with self.driver.session() as session:
-            result = session.write_transaction(self._cold_start_on_popularity)
+            result = session.write_transaction(self.__cold_start_on_popularity)
             return result
     
     def cold_start_with_categories(self, categories):
         with self.driver.session() as session:
-            result = session.write_transaction(self._cold_start_with_categories_on_popularity, categories)
+            result = session.write_transaction(self.__cold_start_with_categories_on_popularity, categories)
             return result
     
     def user_exists(self, user):
@@ -129,7 +129,7 @@ class DbWriter:
 
     
     @staticmethod
-    def _predict_for_user_on_popularity(tx, user):
+    def __predict_for_user_on_popularity(tx, user):
         result = tx.run(
                         " match (u1 {id: $userId})-[r1:read]->(a)<-[r2:read]-(u2)"
                         " match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) "
@@ -139,7 +139,7 @@ class DbWriter:
         return [record["url"] for record in result]
     
     @staticmethod
-    def _cold_start_on_popularity(tx):
+    def __cold_start_on_popularity(tx):
         result = tx.run(
                         " match (u1)-[r1:read]->(recommendation)"
                         " return distinct recommendation.url as url, r1.activeTime as activeTime"
@@ -148,7 +148,7 @@ class DbWriter:
         return [record["url"] for record in result]
     
     @staticmethod
-    def _cold_start_with_categories_on_popularity(tx, categories):
+    def __cold_start_with_categories_on_popularity(tx, categories):
         result = tx.run(
                         " match (u1)-[r1:read]->(recommendation)-[rc:has_category]->(c:Category)"
                         " where c.name in $categories"
@@ -157,7 +157,7 @@ class DbWriter:
                         " limit 10", categories=categories)
         return [record["url"] for record in result]
     
-    def predict_on_popularity(self, users, categories):
+    def predict_on_popularity(self, users, categories=None):
         predictions = []
         nr_of_users = len(users)
         nr = 0
@@ -165,7 +165,7 @@ class DbWriter:
             logging.info("--------------------------------------")
             start_time = time.time()
             if self.user_exists(user):
-                p = self.predict_for_user(user)
+                p = self.__predict_for_user_on_popularity(user)
                 predictions.append([user, p])
             else:
                 logging.info(f"User: {user}, does not exist, running cold start") # In a real case, the user will exist, but it will only have been reading the front-page, this simulate the same behavior
@@ -244,61 +244,4 @@ def load_data(path, files):
     return pd.DataFrame(map_lst) 
 
 if __name__ == "__main__":
-    db = DbWriter("bolt://localhost:7687", "neo4j", "")
-    # Import data into database:
-    total_time = time.time()
-    (train, test) = db.get_file_paths("active1000", 0.7)
-    # logging.info(train, test)
-    db.import_data("active1000", train) 
-    logging.info(f"Import data took: {((time.time() - total_time)/60.0)} minutes") 
-    # Import data took: 290.89670590559643 minutes with frontpages
-    # Import data took: 219.35234892368317 minutes without  frontpages
-    # df_test = load_data("active1000", test[:1])
-    # df_test = df_test.dropna()
-    # logging.info(df_test)
-    # Insert new article
-
-    # for col in df_test.columns:
-    #     logging.info(col)
-    # df_user = df_test[df_test["userId"] == 'cx:13563753207631091420187:v4m7n38yvolp']
-    # logging.info(df_user)
-
-
-    # Run predictions
-    # "Now" is: Saturday, December 31, 2016 23:00:27
-    # oldest_read = 123 #1488330061 # Wednesday, March 1, 2017 1:01:01
-    
-    # Prediction on existing users
-    # logging.info("\n")
-    # users = ["cx:13563753207631091420187:v4m7n38yvolp"] #, "cx:hrrqrd7eclmjbd57:23tj2qhytnkt9", "cx:13233863419858515505:13cyrrnk4fgs"]
-    # predictions = db.predict(users, oldest_read, None)
-    # for prediction in predictions:
-    #     logging.info(f"Title: {prediction[0]}, url: {prediction[1]}, read-time: {str(prediction[2])}, time of read: {str(prediction[3])}")
-    # logging.info("\n")
-
-    # Prediction on new user - cold start
-    # logging.info("\n")
-    # categories = ["sport", "okonomi", "nyheter"] # Simulates that a new user is picking some categories when creating the user
-    # users = ["unknown"]
-    # db.predict(users, oldest_read, categories)
-    # db.close()
-    # logging.info("\n")
-
-
-
-"""
-Recommendation:
-
-match (u1 {id: 'cx:13563753207631091420187:v4m7n38yvolp'})-[r1:read]->(a)<-[r2:read]-(u2)
-where a.title <> 'Frontpage'
-match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) and recommendation.title <> "Frontpage"
-return distinct recommendation.title,r3.activeTime
-order by r3.activeTime desc
-limit 10
-"""
-
-"""
-Dataset info:
-Earliest read: Saturday, December 31, 2016 23:00:27 -> epoch: 1483225227
-Latest read: Friday, March 31, 2017 21:59:59 -> epoch: 1490997599
-"""
+    logging.info("Please use the notebook 'graph_base_db'")
