@@ -25,9 +25,9 @@ class GraphRecommendationSystem:
             for (documentId, categoriesString) in categories:
                 session.write_transaction(self._create_categories, documentId, categoriesString)
 
-    def __predict_for_user_on_popularity(self, user):
+    def _predict_for_user_on_popularity(self, user, friends):
         with self.driver.session() as session:
-            result = session.write_transaction(self.__predict_for_user_on_popularity, user)
+            result = session.write_transaction(self.__predict_for_user_on_popularity, user, friends)
             return result
 
     def cold_start(self):
@@ -128,14 +128,26 @@ class GraphRecommendationSystem:
         
 
     
+    # @staticmethod
+    # def __predict_for_user_on_popularity(tx, user):
+    #     result = tx.run(
+    #                     " match (u1 {id: $userId})-[r1:read]->(a)<-[r2:read]-(u2)"
+    #                     " match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) "
+    #                     " return distinct recommendation.url as url, r3.activeTime as activeTime"
+    #                     " order by activeTime desc"
+    #                     " limit 10", userId=user)
+    #     return [record["url"] for record in result]
+
+
     @staticmethod
-    def __predict_for_user_on_popularity(tx, user):
+    def __predict_for_user_on_popularity(tx, user, friends):
         result = tx.run(
-                        " match (u1 {id: $userId})-[r1:read]->(a)<-[r2:read]-(u2)"
-                        " match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) "
-                        " return distinct recommendation.url as url, r3.activeTime as activeTime"
+                        " match (f:User)-[r:read]->(recommendation:Article) where f.id IN $friendIds"
+                        " match (u:User {id: $userId})"
+                        " where not (u)-[:read]->(recommendation:Article)"
+                        " return distinct recommendation.url as url, r.activeTime as activeTime"
                         " order by activeTime desc"
-                        " limit 10", userId=user)
+                        " limit 10", userId=user, friendIds=friends)
         return [record["url"] for record in result]
     
     @staticmethod
@@ -165,7 +177,8 @@ class GraphRecommendationSystem:
             logging.info("--------------------------------------")
             start_time = time.time()
             if self.user_exists(user):
-                p = self.__predict_for_user_on_popularity(user)
+                friends = self.find_best_friends(user)
+                p = self._predict_for_user_on_popularity(user, friends)
                 predictions.append([user, p])
             else:
                 logging.info(f"User: {user}, does not exist, running cold start") # In a real case, the user will exist, but it will only have been reading the front-page, this simulate the same behavior
@@ -193,18 +206,18 @@ class GraphRecommendationSystem:
                         " match (u:User {id: $userId})-[r:read]->(a:Article)<-[:read]-(f:User)"
                         " return f.id as friend, count(*) as c"
                         " order by c desc"
-                        " limit 3", userId=user)
+                        " limit 10", userId=user)
         return [record["friend"] for record in result]
     
     @staticmethod
-    def _find_newest_to_friend(tx, user, friend):
+    def _find_newest_to_friend(tx, user, friends):
         result = tx.run(
-                        " match (f:User {id: $friendId})-[r:read]->(recommendation:Article)"
+                        " match (f:User)-[r:read]->(recommendation:Article) where f.id IN $friendIds"
                         " match (u:User {id: $userId})"
                         " where not (u)-[:read]->(recommendation:Article)"
                         " return recommendation.url as url, recommendation.publishtime as publishtime"
                         " order by publishtime desc"
-                        " limit 10", userId=user, friendId=friend)
+                        " limit 10", userId=user, friendIds=friends)
         return [record["url"] for record in result]
     
     def predict_on_bestfriends_newest(self, users):
@@ -215,9 +228,10 @@ class GraphRecommendationSystem:
             logging.info("--------------------------------------")
             start_time = time.time()
             friends = self.find_best_friends(user)
-            predictions.append([user, self.find_newest_to_friend(user, friends[0])])
+            predictions.append([user, self.find_newest_to_friend(user, friends)])
             took_m = ((time.time() - start_time)/60.0)
             logging.info(f"User took: {took_m} minutes, {nr}/{nr_of_users}, estimated time left: {((nr_of_users - nr)*took_m)} minutes")
+            nr = nr + 1
         p = []
         for prediction in predictions:
             for pp in prediction[1]:
@@ -245,3 +259,8 @@ def load_data(path, files):
 
 if __name__ == "__main__":
     logging.info("Please use the notebook 'graph_base_db'")
+    db = GraphRecommendationSystem("bolt://localhost:7687", "neo4j", "")
+    start_time = time.time()
+    predictions_raw_df = db.predict_on_popularity(['cx:ihnzu06beuazgkud:dj2r4rm22hul'], None) # NB: runs for ~12 hours
+    predictions_raw_df.to_feather("predictions_popularity_all_users_v3.feather")
+    logging.info(f"Prediction took: {((time.time() - start_time)/60.0)} minutes, or hours: {((time.time() - start_time)/3600.0)}")
