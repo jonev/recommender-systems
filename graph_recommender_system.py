@@ -147,7 +147,7 @@ class GraphRecommendationSystem:
                         " where not (u)-[:read]->(recommendation:Article)"
                         " return distinct recommendation.url as url, r.activeTime as activeTime"
                         " order by activeTime desc"
-                        " limit 10", userId=user, friendIds=friends)
+                        " limit 20", userId=user, friendIds=friends)
         return [record["url"] for record in result]
     
     @staticmethod
@@ -217,7 +217,7 @@ class GraphRecommendationSystem:
                         " where not (u)-[:read]->(recommendation:Article)"
                         " return recommendation.url as url, recommendation.publishtime as publishtime"
                         " order by publishtime desc"
-                        " limit 10", userId=user, friendIds=friends)
+                        " limit 20", userId=user, friendIds=friends)
         return [record["url"] for record in result]
     
     def predict_on_bestfriends_newest(self, users):
