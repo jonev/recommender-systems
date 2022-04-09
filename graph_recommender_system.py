@@ -59,7 +59,6 @@ class GraphRecommendationSystem:
     @staticmethod
     def _create_event(tx, event):
         if event.title is None and event.url == "http://adressa.no":
-            # event.title = "Frontpage"
             return
         if event.title is None:
             event.title = "Unknown"
@@ -91,53 +90,6 @@ class GraphRecommendationSystem:
                         "return u", userId=user)
         return result.single()
 
-    def import_data(self, path, files):
-        nrOfFiles = len(files)
-        nr = 0
-        logging.info(f"Starting import, nr of files: {nrOfFiles}")
-        for f in files:
-            file_name=os.path.join(path,f)
-            nr = nr + 1
-            if os.path.isfile(file_name):
-                start_time = time.time()
-                logging.info(f"Filename: {file_name}, nr: {nr}/{nrOfFiles}")
-                events = []
-                categories = []
-                for line in open(file_name):
-                    event = json.loads(line, object_hook=lambda d: SimpleNamespace(**d))
-                    if not event is None:
-                        events.append(event)
-                        if event.category is not None:
-                            categories.append([event.documentId, event.category])
-                self.insert_events(events)
-                self.insert_categories(categories)
-                logging.info(f"File took: {((time.time() - start_time)/60.0)} minutes")
-    
-    def get_file_paths(self, root_directory: str, test_factor: float):
-        all_files = os.listdir(root_directory)
-        all_files.sort()
-        nr_of_files = len(all_files)
-        logging.info(all_files)
-        logging.info(f"Number of files: {nr_of_files}")
-        train = int(nr_of_files * test_factor)
-        test = nr_of_files - train
-        logging.info(f"Split dataset - files, train: {train}, test: {test}")
-        return (all_files[:train], all_files[train:])
-
-
-        
-
-    
-    # @staticmethod
-    # def __predict_for_user_on_popularity(tx, user):
-    #     result = tx.run(
-    #                     " match (u1 {id: $userId})-[r1:read]->(a)<-[r2:read]-(u2)"
-    #                     " match (u2)-[r3:read]->(recommendation) where not (u1)-[:read]->(recommendation) "
-    #                     " return distinct recommendation.url as url, r3.activeTime as activeTime"
-    #                     " order by activeTime desc"
-    #                     " limit 10", userId=user)
-    #     return [record["url"] for record in result]
-
 
     @staticmethod
     def __predict_for_user_on_popularity(tx, user, friends):
@@ -168,6 +120,7 @@ class GraphRecommendationSystem:
                         " order by r1.activeTime desc"
                         " limit 10", categories=categories)
         return [record["url"] for record in result]
+    
     
     def predict_on_popularity(self, users, categories=None):
         predictions = []
@@ -240,6 +193,38 @@ class GraphRecommendationSystem:
         predictions_df.columns = ["userId", "url"]
         return predictions_df
 
+    def import_data(self, path, files):
+        nrOfFiles = len(files)
+        nr = 0
+        logging.info(f"Starting import, nr of files: {nrOfFiles}")
+        for f in files:
+            file_name=os.path.join(path,f)
+            nr = nr + 1
+            if os.path.isfile(file_name):
+                start_time = time.time()
+                logging.info(f"Filename: {file_name}, nr: {nr}/{nrOfFiles}")
+                events = []
+                categories = []
+                for line in open(file_name):
+                    event = json.loads(line, object_hook=lambda d: SimpleNamespace(**d))
+                    if not event is None:
+                        events.append(event)
+                        if event.category is not None:
+                            categories.append([event.documentId, event.category])
+                self.insert_events(events)
+                self.insert_categories(categories)
+                logging.info(f"File took: {((time.time() - start_time)/60.0)} minutes")
+    
+    def get_file_paths(self, root_directory: str, test_factor: float):
+        all_files = os.listdir(root_directory)
+        all_files.sort()
+        nr_of_files = len(all_files)
+        logging.info(all_files)
+        logging.info(f"Number of files: {nr_of_files}")
+        train = int(nr_of_files * test_factor)
+        test = nr_of_files - train
+        logging.info(f"Split dataset - files, train: {train}, test: {test}")
+        return (all_files[:train], all_files[train:])
 
 def load_data(path, files):
     map_lst=[]
@@ -259,8 +244,3 @@ def load_data(path, files):
 
 if __name__ == "__main__":
     logging.info("Please use the notebook 'graph_base_db'")
-    db = GraphRecommendationSystem("bolt://localhost:7687", "neo4j", "")
-    start_time = time.time()
-    predictions_raw_df = db.predict_on_popularity(['cx:ihnzu06beuazgkud:dj2r4rm22hul'], None) # NB: runs for ~12 hours
-    predictions_raw_df.to_feather("predictions_popularity_all_users_v3.feather")
-    logging.info(f"Prediction took: {((time.time() - start_time)/60.0)} minutes, or hours: {((time.time() - start_time)/3600.0)}")
